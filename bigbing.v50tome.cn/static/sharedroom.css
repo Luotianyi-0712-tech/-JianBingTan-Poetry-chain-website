@@ -1,0 +1,233 @@
+/* 共享空间页面样式 */
+body {
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.shared-room-container {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #f5f5f0 0%, #e8e8d0 50%, #f0f0e0 100%);
+    padding: 20px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.shared-room-header {
+    text-align: center;
+    padding: 40px 20px;
+    position: relative;
+}
+
+.shared-room-header h1 {
+    font-size: 48px;
+    color: #6b5b47;
+    margin-bottom: 10px;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.shared-room-header .subtitle {
+    font-size: 18px;
+    color: #8b7355;
+    margin-bottom: 20px;
+}
+
+.back-btn {
+    display: inline-block;
+    padding: 10px 20px;
+    background: #8b7355;
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: all 0.3s ease;
+    font-weight: 500;
+}
+
+.back-btn:hover {
+    background: #6b5b47;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* 房间网格 */
+.room-grid {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 30px;
+    padding: 20px;
+}
+
+/* 房间卡片 */
+.room-card {
+    background: white;
+    border-radius: 16px;
+    padding: 30px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+    border: 2px solid #e8e8d0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.room-card:hover {
+    transform: translateY(-8px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    border-color: #8b7355;
+}
+
+.room-icon {
+    font-size: 64px;
+    margin-bottom: 20px;
+    animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+    0%, 100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-10px);
+    }
+}
+
+.room-card h3 {
+    font-size: 28px;
+    color: #6b5b47;
+    margin-bottom: 10px;
+    font-weight: 600;
+}
+
+.room-desc {
+    font-size: 16px;
+    color: #8b7355;
+    margin-bottom: 20px;
+    font-style: italic;
+}
+
+/* 房间统计 */
+.room-stats {
+    display: flex;
+    gap: 30px;
+    margin-bottom: 25px;
+    padding: 15px;
+    background: rgba(139, 115, 85, 0.05);
+    border-radius: 8px;
+    width: 100%;
+    justify-content: center;
+}
+
+.stat-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.stat-icon {
+    font-size: 20px;
+}
+
+.stat-value {
+    font-size: 20px;
+    font-weight: bold;
+    color: #6b5b47;
+}
+
+/* 加入按钮 */
+.join-room-btn {
+    width: 100%;
+    padding: 14px 28px;
+    background: linear-gradient(135deg, #8b7355 0%, #6b5b47 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(139, 115, 85, 0.3);
+}
+
+.join-room-btn:hover {
+    background: linear-gradient(135deg, #6b5b47 0%, #5b4b37 100%);
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(139, 115, 85, 0.4);
+}
+
+.join-room-btn:active {
+    transform: scale(0.98);
+}
+
+/* 页脚 */
+.shared-room-footer {
+    text-align: center;
+    padding: 30px 20px;
+    color: #8b7355;
+    font-size: 14px;
+}
+
+.shared-room-footer p {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.6);
+    border-radius: 8px;
+    border-left: 4px solid #8b7355;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    .shared-room-header h1 {
+        font-size: 36px;
+    }
+
+    .shared-room-header .subtitle {
+        font-size: 16px;
+    }
+
+    .room-grid {
+        grid-template-columns: 1fr;
+        gap: 20px;
+        padding: 10px;
+    }
+
+    .room-card {
+        padding: 20px;
+    }
+
+    .room-icon {
+        font-size: 48px;
+    }
+
+    .room-card h3 {
+        font-size: 24px;
+    }
+
+    .room-stats {
+        gap: 20px;
+    }
+}
+
+@media (max-width: 480px) {
+    .shared-room-container {
+        padding: 10px;
+    }
+
+    .shared-room-header {
+        padding: 20px 10px;
+    }
+
+    .shared-room-header h1 {
+        font-size: 28px;
+    }
+
+    .room-card h3 {
+        font-size: 20px;
+    }
+
+    .room-desc {
+        font-size: 14px;
+    }
+}

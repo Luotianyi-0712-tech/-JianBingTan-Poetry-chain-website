@@ -14,7 +14,7 @@ if __name__ == '__main__':
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
     
     # 生产环境端口配置
-    port = int(os.environ.get('PORT', 5001))
+    port = int(os.environ.get('PORT', 5000))
     
     # 生产环境主机配置
     host = os.environ.get('HOST', '0.0.0.0')
@@ -29,15 +29,6 @@ if __name__ == '__main__':
         print("\n服务器已停止")
     except Exception as e:
         print(f"服务器启动失败: {e}")
-
-
-
-
-
-
-
-
-
 
 
 

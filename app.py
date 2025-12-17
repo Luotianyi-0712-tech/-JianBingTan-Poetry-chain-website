@@ -1,32 +1,187 @@
-from flask import Flask, render_template, request, jsonify, session
-from flask_socketio import SocketIO, emit, join_room, leave_room, rooms
-import json
-
+# -*- coding: utf-8 -*-
+import sys
 import os
-import uuid
-import time
+
+# 设置标准输出编码为UTF-8
+if sys.platform.startswith('win'):
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+from flask import Flask, render_template, request, jsonify, session
+import json
+import random
+import glob
 from datetime import datetime, timedelta
-from threading import Lock
+import secrets
+import threading
+import time
+
+# 繁简转换
+try:
+    from opencc import OpenCC
+    cc = OpenCC('t2s')  # 繁体转简体
+except ImportError:
+    # 如果没有opencc，使用基本的字符映射
+    cc = None
+    print("提示：安装 opencc-python-reimplemented 可获得更好的繁简转换效果")
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'jianbing_game_secret_key_2024'
-# 使用threading模式而不是eventlet，避免Python 3.12+兼容性问题
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+app.secret_key = secrets.token_hex(16)  # 用于session加密
 
-# 数据存储文件
-DATA_FILE = 'game_data.json'
-ROOMS_FILE = 'rooms_data.json'
+# 房间数据存储（内存）
+ROOMS = {}  # {room_id: {'data': game_data, 'last_active': datetime, 'created_at': datetime}}
+ROOM_TIMEOUT = 3600  # 房间超时时间（秒），1小时无活动自动清理
 
-# 内存中的房间数据
-rooms_data = {}
-rooms_lock = Lock()
+# 诗词数据库（全局共享）
+POETRY_DATABASE = None
+CHARACTER_INDEX = None
 
-# 用户会话管理
-user_sessions = {}
+def to_simplified(text):
+    """繁体转简体"""
+    if not text:
+        return text
+    if cc:
+        return cc.convert(text)
+    else:
+        # 如果没有opencc，返回原文
+        return text
 
-# 在线用户管理 - 存储socket_id到用户信息的映射
-online_users = {}  # {socket_id: {'username': str, 'room_code': str, 'join_time': timestamp}}
-online_users_lock = Lock()
+def load_poetry_database():
+    """加载诗词数据库"""
+    global POETRY_DATABASE, CHARACTER_INDEX
+    if POETRY_DATABASE is not None:
+        return
+    
+    POETRY_DATABASE = []
+    CHARACTER_INDEX = {}  # 字符索引：{字: [诗句索引列表]}
+    
+    # 扫描data目录下的所有JSON文件
+    data_dir = 'data'
+    json_files = glob.glob(os.path.join(data_dir, '**', '*.json'), recursive=True)
+    
+    # 常见的中文标点符号
+    punctuation = '，。；！？、：""''（）《》【】'
+    
+    for json_file in json_files:
+        try:
+            with open(json_file, 'r', encoding='utf-8') as f:
+                poems = json.load(f)
+                if isinstance(poems, list):
+                    for poem in poems:
+                        if isinstance(poem, dict) and 'paragraphs' in poem:
+                            # 过滤掉空段落
+                            paragraphs = [p.strip() for p in poem['paragraphs'] if p and p.strip()]
+                            if not paragraphs:
+                                continue
+                            
+                            # 获取完整作品内容（原文-繁体）
+                            full_work_traditional = '\n'.join(paragraphs)
+                            # 转换为简体
+                            full_work_simplified = to_simplified(full_work_traditional)
+                            
+                            # 处理每首诗的每一句
+                            for paragraph in paragraphs:
+                                # 按标点符号拆分成半句
+                                # 先替换所有标点符号为统一的分隔符
+                                temp_text = paragraph
+                                for p in punctuation:
+                                    temp_text = temp_text.replace(p, '|')
+                                
+                                # 按分隔符拆分
+                                half_sentences = [s.strip() for s in temp_text.split('|') if s.strip()]
+                                
+                                # 为每个半句创建条目
+                                for half_sentence in half_sentences:
+                                    # 去除标点符号，只保留汉字
+                                    clean_text = ''.join(c for c in half_sentence if '\u4e00' <= c <= '\u9fff')
+                                    
+                                    if clean_text and len(clean_text) >= 3:  # 至少3个字才算有效
+                                        poem_entry = {
+                                            'text': clean_text,
+                                            'original': paragraph,  # 当前句（原文）
+                                            'half_sentence': half_sentence,  # 当前半句（原文）
+                                            'full_work': full_work_simplified,  # ✅ 完整作品（简体）
+                                            'full_work_traditional': full_work_traditional,  # 完整作品（繁体原文）
+                                            'title': to_simplified(poem.get('title', '')),  # 标题（简体）
+                                            'author': to_simplified(poem.get('author', '')),  # 作者（简体）
+                                            'dynasty': to_simplified(poem.get('dynasty', '')),  # 朝代（简体）
+                                            'rhythmic': to_simplified(poem.get('rhythmic', ''))  # 词牌名（简体）
+                                        }
+                                        poem_index = len(POETRY_DATABASE)
+                                        POETRY_DATABASE.append(poem_entry)
+                                        
+                                        
+                                        # 建立字符索引（原文字符）
+                                        for char in clean_text:
+                                            if char not in CHARACTER_INDEX:
+                                                CHARACTER_INDEX[char] = []
+                                            CHARACTER_INDEX[char].append(poem_index)
+                                        
+                                        # 同时为简体字符建立索引（提高查找率）
+                                        if cc:
+                                            clean_text_simplified = cc.convert(clean_text)
+                                            for char in clean_text_simplified:
+                                                if char not in CHARACTER_INDEX:
+                                                    CHARACTER_INDEX[char] = []
+                                                if poem_index not in CHARACTER_INDEX[char]:
+                                                    CHARACTER_INDEX[char].append(poem_index)
+        except Exception as e:
+            print(f"加载诗词文件失败 {json_file}: {e}")
+    
+    print(f"诗词数据库加载完成: {len(POETRY_DATABASE)} 句诗（半句）, {len(CHARACTER_INDEX)} 个字符")
+
+def create_room_id():
+    """生成随机房间ID"""
+    return secrets.token_urlsafe(8)
+
+def create_room():
+    """创建新房间"""
+    room_id = create_room_id()
+    ROOMS[room_id] = {
+        'data': {'poems': [], 'grid': [[None for _ in range(100)] for _ in range(100)]},
+        'last_active': datetime.now(),
+        'created_at': datetime.now()
+    }
+    print(f"创建房间: {room_id}")
+    return room_id
+
+def get_room_data(room_id):
+    """获取房间数据"""
+    if room_id not in ROOMS:
+        return None
+    # 更新活动时间
+    ROOMS[room_id]['last_active'] = datetime.now()
+    return ROOMS[room_id]['data']
+
+def update_room_data(room_id, data):
+    """更新房间数据"""
+    if room_id in ROOMS:
+        ROOMS[room_id]['data'] = data
+        ROOMS[room_id]['last_active'] = datetime.now()
+
+def cleanup_inactive_rooms():
+    """清理不活跃的房间"""
+    while True:
+        time.sleep(300)  # 每5分钟检查一次
+        now = datetime.now()
+        rooms_to_delete = []
+        
+        for room_id, room_info in ROOMS.items():
+            inactive_seconds = (now - room_info['last_active']).total_seconds()
+            if inactive_seconds > ROOM_TIMEOUT:
+                rooms_to_delete.append(room_id)
+        
+        for room_id in rooms_to_delete:
+            print(f"🗑️ 清理房间: {room_id} (最后活动: {ROOMS[room_id]['last_active'].strftime('%H:%M:%S')})")
+            del ROOMS[room_id]
+        
+        if rooms_to_delete:
+            print(f"📊 当前房间数: {len(ROOMS)}")
+
+# 启动房间清理线程
+cleanup_thread = threading.Thread(target=cleanup_inactive_rooms, daemon=True)
+cleanup_thread.start()
 
 def load_game_data():
     """加载游戏数据"""
@@ -44,385 +199,48 @@ def save_game_data(data):
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def load_rooms_data():
-    """加载房间数据"""
-    if os.path.exists(ROOMS_FILE):
-        with open(ROOMS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
-
-def save_rooms_data():
-    """保存房间数据"""
-    with open(ROOMS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(rooms_data, f, ensure_ascii=False, indent=2)
-
-def generate_room_code():
-    """生成6位房间码"""
-    import random
-    return str(random.randint(100000, 999999))
-
-def create_room(room_code, creator_name):
-    """创建房间"""
-    with rooms_lock:
-        if room_code in rooms_data:
-            return False
-        
-        rooms_data[room_code] = {
-            'code': room_code,
-            'creator': creator_name,
-            'players': [creator_name],
-            'game_data': {
-                'poems': [],
-                'grid': [[None for _ in range(100)] for _ in range(100)],
-                'last_updated': datetime.now().isoformat()
-            },
-            'created_at': datetime.now().isoformat(),
-            'last_activity': time.time(),
-            'editing_users': {}  # 记录正在编辑的用户
-        }
-        save_rooms_data()
-        return True
-
-def is_admin_room(room_code):
-    """检查是否为管理员房间"""
-    return room_code == '207128'
-
-def get_online_users_in_room(room_code):
-    """获取房间内在线用户列表"""
-    with online_users_lock:
-        online_in_room = []
-        for socket_id, user_info in online_users.items():
-            if user_info['room_code'] == room_code:
-                online_in_room.append(user_info['username'])
-        return online_in_room
-
-def get_player_stats(room_code):
-    """获取房间内玩家统计信息"""
-    with rooms_lock:
-        if room_code not in rooms_data:
-            return {}
-        
-        room_data = rooms_data[room_code]
-        poems = room_data['game_data']['poems']
-        
-        # 统计每个玩家的诗词数量
-        from collections import Counter
-        poem_counts = Counter(poem['author'] for poem in poems)
-        
-        # 获取在线用户列表
-        online_users_list = get_online_users_in_room(room_code)
-        
-        # 构建玩家统计信息
-        player_stats = {}
-        for player in room_data['players']:
-            player_stats[player] = {
-                'poem_count': poem_counts.get(player, 0),
-                'is_online': player in online_users_list
-            }
-        
-        return player_stats
-
-def get_all_rooms_info():
-    """获取所有房间信息（管理员专用）"""
-    with rooms_lock:
-        rooms_info = []
-        for room_code, room_data in rooms_data.items():
-            if not is_admin_room(room_code):  # 排除管理员房间本身
-                rooms_info.append({
-                    'code': room_code,
-                    'creator': room_data['creator'],
-                    'player_count': len(room_data['players']),
-                    'players': room_data['players'],
-                    'created_at': room_data['created_at'],
-                    'last_activity': room_data['last_activity'],
-                    'poem_count': len(room_data['game_data']['poems']),
-                    'editing_count': len(room_data.get('editing_users', {}))
-                })
-        return sorted(rooms_info, key=lambda x: x['last_activity'], reverse=True)
-
-def join_room_by_code(room_code, player_name):
-    """通过房间码加入房间"""
-    with rooms_lock:
-        if room_code not in rooms_data:
-            return False
-        
-        if player_name not in rooms_data[room_code]['players']:
-            rooms_data[room_code]['players'].append(player_name)
-            rooms_data[room_code]['last_activity'] = time.time()
-            save_rooms_data()
-        return True
-
-def leave_room_by_code(room_code, player_name):
-    """离开房间"""
-    with rooms_lock:
-        if room_code not in rooms_data:
-            return
-        
-        if player_name in rooms_data[room_code]['players']:
-            rooms_data[room_code]['players'].remove(player_name)
-            rooms_data[room_code]['last_activity'] = time.time()
-            
-            # 如果房间没人了，删除房间
-            if not rooms_data[room_code]['players']:
-                del rooms_data[room_code]
-            save_rooms_data()
-
-def get_room_data(room_code):
-    """获取房间数据"""
-    with rooms_lock:
-        return rooms_data.get(room_code)
-
-def update_room_game_data(room_code, game_data):
-    """更新房间游戏数据"""
-    with rooms_lock:
-        if room_code in rooms_data:
-            rooms_data[room_code]['game_data'] = game_data
-            rooms_data[room_code]['last_activity'] = time.time()
-            save_rooms_data()
-
-def cleanup_inactive_rooms():
-    """清理不活跃的房间（超过12小时无活动）"""
-    current_time = time.time()
-    with rooms_lock:
-        inactive_rooms = []
-        for room_code, room_data in rooms_data.items():
-            if current_time - room_data['last_activity'] > 3600 * 12:  # 12小时
-                inactive_rooms.append(room_code)
-        
-        for room_code in inactive_rooms:
-            del rooms_data[room_code]
-        
-        if inactive_rooms:
-            save_rooms_data()
-
 @app.route('/')
 def index():
-    """主页面"""
+    """主页面 - 自动创建或获取房间"""
+    # 检查session中是否有房间ID
+    if 'room_id' not in session or session['room_id'] not in ROOMS:
+        # 创建新房间
+        room_id = create_room()
+        session['room_id'] = room_id
+        print(f"🎮 新用户进入，房间ID: {room_id}")
+    else:
+        print(f"🔄 用户返回，房间ID: {session['room_id']}")
+    
     return render_template('index.html')
 
-@app.route('/api/register', methods=['POST'])
-def register_user():
-    """用户注册"""
-    data = request.json
-    username = data.get('username', '').strip()
+@app.route('/api/poems', methods=['GET'])
+def get_poems():
+    """获取所有诗句"""
+    room_id = session.get('room_id')
+    if not room_id:
+        return jsonify({'success': False, 'error': '未找到房间'}), 400
     
-    if not username:
-        return jsonify({'success': False, 'message': '用户名不能为空'})
+    data = get_room_data(room_id)
+    if not data:
+        return jsonify({'success': False, 'error': '房间不存在'}), 404
     
-    if len(username) > 20:
-        return jsonify({'success': False, 'message': '用户名不能超过20个字符'})
-    
-    # 生成用户ID
-    user_id = str(uuid.uuid4())
-    session['user_id'] = user_id
-    session['username'] = username
-    
-    return jsonify({
-        'success': True, 
-        'user_id': user_id,
-        'username': username,
-        'message': '注册成功'
-    })
+    return jsonify(data['poems'])
 
-@app.route('/api/create_room', methods=['POST'])
-def create_room_api():
-    """创建房间"""
-    if 'username' not in session:
-        return jsonify({'success': False, 'message': '请先注册'})
+@app.route('/api/poems', methods=['POST'])
+def add_poem():
+    """添加新诗句"""
+    room_id = session.get('room_id')
+    if not room_id:
+        return jsonify({'success': False, 'error': '未找到房间'}), 400
     
-    username = session['username']
-    room_code = generate_room_code()
-    
-    # 确保房间码唯一
-    while room_code in rooms_data:
-        room_code = generate_room_code()
-    
-    if create_room(room_code, username):
-        return jsonify({
-            'success': True,
-            'room_code': room_code,
-            'message': '房间创建成功'
-        })
-    else:
-        return jsonify({'success': False, 'message': '房间创建失败'})
-
-@app.route('/api/join_room', methods=['POST'])
-def join_room_api():
-    """加入房间"""
-    if 'username' not in session:
-        return jsonify({'success': False, 'message': '请先注册'})
-    
-    data = request.json
-    room_code = data.get('room_code', '').strip()
-    username = session['username']
-    
-    if not room_code:
-        return jsonify({'success': False, 'message': '房间码不能为空'})
-    
-    if join_room_by_code(room_code, username):
-        return jsonify({
-            'success': True,
-            'room_code': room_code,
-            'message': '加入房间成功'
-        })
-    else:
-        return jsonify({'success': False, 'message': '房间不存在'})
-
-@app.route('/api/room/<room_code>')
-def get_room_info(room_code):
-    """获取房间信息"""
-    room_data = get_room_data(room_code)
-    if not room_data:
-        return jsonify({'success': False, 'message': '房间不存在'})
-    
-    return jsonify({
-        'success': True,
-        'room': {
-            'code': room_data['code'],
-            'creator': room_data['creator'],
-            'players': room_data['players'],
-            'created_at': room_data['created_at']
-        }
-    })
-
-@app.route('/api/room/<room_code>/stats')
-def get_room_stats(room_code):
-    """获取房间玩家统计信息"""
-    if 'username' not in session:
-        return jsonify({'success': False, 'message': '请先注册'})
-    
-    room_data = get_room_data(room_code)
-    if not room_data:
-        return jsonify({'success': False, 'message': '房间不存在'})
-    
-    username = session['username']
-    if username not in room_data['players']:
-        return jsonify({'success': False, 'message': '您不在该房间中'})
-    
-    player_stats = get_player_stats(room_code)
-    
-    return jsonify({
-        'success': True,
-        'player_stats': player_stats
-    })
-
-@app.route('/api/admin/rooms')
-def get_admin_rooms_info():
-    """获取所有房间信息（管理员专用）"""
-    if 'username' not in session:
-        return jsonify({'success': False, 'message': '请先登录'})
-    
-    username = session['username']
-    if username != '管理员':
-        return jsonify({'success': False, 'message': '权限不足'})
-    
-    rooms_info = get_all_rooms_info()
-    return jsonify({
-        'success': True,
-        'rooms': rooms_info,
-        'total_rooms': len(rooms_info),
-        'total_players': sum(room['player_count'] for room in rooms_info)
-    })
-
-@app.route('/api/admin/join_admin_room', methods=['POST'])
-def join_admin_room():
-    """加入管理员房间"""
-    if 'username' not in session:
-        return jsonify({'success': False, 'message': '请先登录'})
-    
-    username = session['username']
-    if username != '管理员':
-        return jsonify({'success': False, 'message': '权限不足'})
-    
-    admin_room_code = '207128'
-    
-    # 如果管理员房间不存在，创建它
-    if admin_room_code not in rooms_data:
-        create_room(admin_room_code, username)
-    else:
-        # 如果存在，确保管理员在房间中
-        if username not in rooms_data[admin_room_code]['players']:
-            rooms_data[admin_room_code]['players'].append(username)
-            rooms_data[admin_room_code]['last_activity'] = time.time()
-            save_rooms_data()
-    
-    return jsonify({
-        'success': True,
-        'room_code': admin_room_code,
-        'message': '进入管理员房间成功'
-    })
-
-@app.route('/api/admin/delete_room', methods=['POST'])
-def delete_room():
-    """删除房间（管理员专用）"""
-    if 'username' not in session:
-        return jsonify({'success': False, 'message': '请先登录'})
-    
-    username = session['username']
-    if username != '管理员':
-        return jsonify({'success': False, 'message': '权限不足'})
-    
-    data = request.json
-    room_code = data.get('room_code')
-    
-    if not room_code:
-        return jsonify({'success': False, 'message': '房间码不能为空'})
-    
-    # 不能删除管理员房间
-    if is_admin_room(room_code):
-        return jsonify({'success': False, 'message': '不能删除管理员房间'})
-    
-    with rooms_lock:
-        if room_code not in rooms_data:
-            return jsonify({'success': False, 'message': '房间不存在'})
-        
-        room_data = rooms_data[room_code]
-        players = room_data['players'].copy()  # 复制玩家列表
-        
-        # 删除房间
-        del rooms_data[room_code]
-        save_rooms_data()
-        
-        # 通知房间内所有玩家房间已被删除
-        socketio.emit('room_deleted', {
-            'room_code': room_code,
-            'message': f'房间 {room_code} 已被管理员删除',
-            'deleted_by': username
-        }, room=room_code)
-        
-        return jsonify({
-            'success': True,
-            'message': f'房间 {room_code} 删除成功',
-            'affected_players': players
-        })
-
-@app.route('/api/poems/<room_code>', methods=['GET'])
-def get_poems(room_code):
-    """获取房间诗句"""
-    room_data = get_room_data(room_code)
-    if not room_data:
-        return jsonify({'success': False, 'message': '房间不存在'})
-    
-    return jsonify(room_data['game_data']['poems'])
-
-@app.route('/api/poems/<room_code>', methods=['POST'])
-def add_poem(room_code):
-    """添加新诗句到房间"""
-    if 'username' not in session:
-        return jsonify({'success': False, 'message': '请先注册'})
-    
-    room_data = get_room_data(room_code)
-    if not room_data:
-        return jsonify({'success': False, 'message': '房间不存在'})
-    
-    username = session['username']
-    if username not in room_data['players']:
-        return jsonify({'success': False, 'message': '您不在该房间中'})
+    data = get_room_data(room_id)
+    if not data:
+        return jsonify({'success': False, 'error': '房间不存在'}), 404
     
     poem_data = request.json
     
-    # 生成唯一ID
-    poem_id = f"poem_{len(room_data['game_data']['poems']) + 1:03d}_{int(time.time())}"
+    # 使用前端传来的ID，如果没有则生成新ID
+    poem_id = poem_data.get('id') or f"poem_{len(data['poems']) + 1:03d}_{int(datetime.now().timestamp() * 1000)}"
     
     # 创建新诗句对象
     new_poem = {
@@ -432,72 +250,282 @@ def add_poem(room_code):
         'startPosition': poem_data['startPosition'],
         'color': poem_data['color'],
         'connectedTo': poem_data.get('connectedTo', []),
-        'author': username,
+        'isAI': poem_data.get('isAI', False),  # 保存AI标记
+        'metadata': poem_data.get('metadata'),  # 保存元数据
         'created_at': datetime.now().isoformat()
     }
     
     # 添加到诗句列表
-    room_data['game_data']['poems'].append(new_poem)
+    data['poems'].append(new_poem)
     
     # 更新网格
-    update_grid(room_data['game_data'], new_poem)
+    update_grid(data, new_poem)
     
-    # 保存房间数据
-    update_room_game_data(room_code, room_data['game_data'])
+    # 更新房间数据
+    update_room_data(room_id, data)
     
-    # 广播给房间内所有用户
-    socketio.emit('poem_added', {
-        'poem': new_poem,
-        'author': username
-    }, room=room_code)
-    
-    # 广播更新的玩家统计
-    player_stats = get_player_stats(room_code)
-    socketio.emit('player_stats_update', {
-        'player_stats': player_stats
-    }, room=room_code)
+    print(f"✅ 房间 {room_id}: 诗句已保存 ID={poem_id}, 文本={poem_data['text']}")
     
     return jsonify({'success': True, 'poem': new_poem})
 
-@app.route('/api/grid/<room_code>', methods=['GET'])
-def get_grid(room_code):
-    """获取房间网格状态"""
-    room_data = get_room_data(room_code)
-    if not room_data:
-        return jsonify({'success': False, 'message': '房间不存在'})
+@app.route('/api/grid', methods=['GET'])
+def get_grid():
+    """获取网格状态"""
+    room_id = session.get('room_id')
+    if not room_id:
+        return jsonify({'success': False, 'error': '未找到房间'}), 400
     
-    return jsonify(room_data['game_data']['grid'])
+    data = get_room_data(room_id)
+    if not data:
+        return jsonify({'success': False, 'error': '房间不存在'}), 404
+    
+    return jsonify(data['grid'])
 
-@app.route('/api/reset/<room_code>', methods=['POST'])
-def reset_game(room_code):
-    """重置房间游戏"""
-    if 'username' not in session:
-        return jsonify({'success': False, 'message': '请先注册'})
+@app.route('/api/reset', methods=['POST'])
+def reset_game():
+    """重置游戏"""
+    room_id = session.get('room_id')
+    if not room_id:
+        return jsonify({'success': False, 'error': '未找到房间'}), 400
     
-    room_data = get_room_data(room_code)
-    if not room_data:
-        return jsonify({'success': False, 'message': '房间不存在'})
-    
-    username = session['username']
-    if username not in room_data['players']:
-        return jsonify({'success': False, 'message': '您不在该房间中'})
-    
-    # 重置游戏数据
-    room_data['game_data'] = {
+    data = {
         'poems': [],
-        'grid': [[None for _ in range(100)] for _ in range(100)],
-        'last_updated': datetime.now().isoformat()
+        'grid': [[None for _ in range(100)] for _ in range(100)]
     }
-    
-    # 保存房间数据
-    update_room_game_data(room_code, room_data['game_data'])
-    
-    # 广播给房间内所有用户
-    socketio.emit('game_reset', {
-        'reset_by': username
-    }, room=room_code)
-    
+    update_room_data(room_id, data)
+    print(f"🔄 房间 {room_id}: 游戏已重置")
     return jsonify({'success': True})
+
+@app.route('/api/room/info', methods=['GET'])
+def get_room_info():
+    """获取当前房间信息"""
+    room_id = session.get('room_id')
+    if not room_id or room_id not in ROOMS:
+        return jsonify({'success': False, 'error': '未找到房间'}), 400
+    
+    room_info = ROOMS[room_id]
+    return jsonify({
+        'success': True,
+        'room_id': room_id,
+        'created_at': room_info['created_at'].isoformat(),
+        'last_active': room_info['last_active'].isoformat(),
+        'poem_count': len(room_info['data']['poems'])
+    })
+
+@app.route('/api/ai/find-poem', methods=['POST'])
+def ai_find_poem():
+    """AI查找诗句"""
+    try:
+        request_data = request.json
+        char = request_data.get('char')
+        
+        if not char:
+            return jsonify({'success': False, 'error': '未提供字符'})
+        
+        poems = find_poems_by_character(char, max_results=20)
+        return jsonify({
+            'success': True,
+            'poems': poems,
+            'count': len(poems)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/ai/place-poem', methods=['POST'])
+def ai_place_poem():
+    """AI放置诗句"""
+    try:
+        room_id = session.get('room_id')
+        if not room_id:
+            return jsonify({'success': False, 'error': '未找到房间'}), 400
+        
+        data = get_room_data(room_id)
+        if not data:
+            return jsonify({'success': False, 'error': '房间不存在'}), 404
+        
+        request_data = request.json
+        player_poem_id = request_data.get('playerPoemId')
+        ai_color = request_data.get('aiColor', '#FFB6C1')
+        
+        print(f"\n=== 房间 {room_id}: AI接诗请求 ===")
+        print(f"玩家诗句ID: {player_poem_id}")
+        
+        # 找到玩家刚放置的诗句
+        player_poem = None
+        for poem in data['poems']:
+            if poem['id'] == player_poem_id:
+                player_poem = poem
+                break
+        
+        if not player_poem:
+            return jsonify({'success': False, 'error': f'未找到玩家诗句 (ID: {player_poem_id})'})
+        
+        # 尝试为AI找到合适的诗句和位置
+        result = find_ai_poem_placement(data, player_poem, ai_color)
+        
+        if result['success']:
+            # 添加AI诗句到游戏数据
+            ai_poem = result['poem']
+            data['poems'].append(ai_poem)
+            update_grid(data, ai_poem)
+            update_room_data(room_id, data)
+            
+            return jsonify({
+                'success': True,
+                'poem': ai_poem
+            })
+        else:
+            return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+def find_ai_poem_placement(data, player_poem, ai_color):
+    """为AI找到合适的诗句和位置"""
+    # 获取玩家诗句的所有字符位置
+    player_text = player_poem['text']
+    player_direction = player_poem['direction']
+    player_start = player_poem['startPosition']
+    
+    # 生成所有可能的连接点
+    connection_points = []
+    for i, char in enumerate(player_text):
+        if player_direction == 'horizontal':
+            x = player_start['x'] + i
+            y = player_start['y']
+        else:
+            x = player_start['x']
+            y = player_start['y'] + i
+        connection_points.append({'x': x, 'y': y, 'char': char, 'index': i})
+    
+    # 按优先级排序连接点：中间 > 后面 > 前面
+    text_len = len(player_text)
+    def get_priority(point):
+        idx = point['index']
+        # 中间位置优先级最高
+        if text_len > 2 and 0 < idx < text_len - 1:
+            return 0  # 最高优先级
+        # 后面位置次之
+        elif idx == text_len - 1:
+            return 1
+        # 前面位置最后
+        else:
+            return 2
+    
+    connection_points.sort(key=get_priority)
+    
+    # AI的方向应该与玩家相反
+    ai_direction = 'vertical' if player_direction == 'horizontal' else 'horizontal'
+    
+    print(f"AI尝试接诗，玩家诗句: {player_text}, 方向: {player_direction}")
+    print(f"连接点优先级顺序: {[(p['char'], p['index']) for p in connection_points]}")
+    
+    # 尝试每个字符，最多尝试3次随机诗句
+    for point in connection_points:
+        poems = find_poems_by_character(point['char'], max_results=20)
+        if not poems:
+            continue
+        
+        # 随机打乱诗句顺序
+        random.shuffle(poems)
+        
+        # 尝试最多3首诗
+        print(f"尝试字符 '{point['char']}' (索引{point['index']}), 找到 {len(poems)} 首诗")
+        for idx, poem in enumerate(poems[:3]):
+            print(f"  尝试第{idx+1}首: {poem['text'][:10]}...")
+            # 对于每首诗，尝试所有可能的连接位置
+            for char_pos in poem['char_positions']:
+                # 计算AI诗句的起始位置
+                if ai_direction == 'horizontal':
+                    start_x = point['x'] - char_pos
+                    start_y = point['y']
+                else:
+                    start_x = point['x']
+                    start_y = point['y'] - char_pos
+                
+                # 检查是否可以放置（不超出边界，不重叠）
+                if can_place_poem(data, poem['text'], ai_direction, start_x, start_y, point):
+                    # 生成AI诗句对象
+                    ai_poem = {
+                        'id': f"ai_poem_{len(data['poems']) + 1:03d}_{int(datetime.now().timestamp() * 1000)}",
+                        'text': poem['text'],
+                        'direction': ai_direction,
+                        'startPosition': {'x': start_x, 'y': start_y},
+                        'color': ai_color,
+                        'connectedTo': [player_poem['id']],
+                        'isAI': True,
+                        'metadata': {
+                            'original': to_simplified(poem.get('half_sentence', poem['text'])),  # AI接的半句（简体）
+                            'full_sentence': to_simplified(poem['original']),  # 完整句子（简体）
+                            'full_work': poem.get('full_work', to_simplified(poem['original'])),  # 完整作品（简体）
+                            'title': poem['title'],  # 已经是简体
+                            'author': poem['author'],  # 已经是简体
+                            'dynasty': poem['dynasty'],  # 已经是简体
+                            'rhythmic': poem.get('rhythmic', '')  # 已经是简体
+                        },
+                        'created_at': datetime.now().isoformat()
+                    }
+                    # 简化调试信息
+                    print(f"✓ AI接诗: {poem['text']} (位置: {start_x}, {start_y})")
+                    return {'success': True, 'poem': ai_poem}
+    
+    return {'success': False, 'error': '无法找到合适的位置放置AI诗句'}
+
+def can_place_poem(data, text, direction, start_x, start_y, allowed_overlap_point):
+    """检查是否可以放置诗句"""
+    # 检查边界
+    if direction == 'horizontal':
+        if start_x < 0 or start_x + len(text) > 100 or start_y < 0 or start_y >= 100:
+            return False
+    else:
+        if start_x < 0 or start_x >= 100 or start_y < 0 or start_y + len(text) > 100:
+            return False
+    
+    # 检查重叠
+    for i, char in enumerate(text):
+        if direction == 'horizontal':
+            check_x = start_x + i
+            check_y = start_y
+        else:
+            check_x = start_x
+            check_y = start_y + i
+        
+        # 如果是允许重叠的连接点，跳过
+        if check_x == allowed_overlap_point['x'] and check_y == allowed_overlap_point['y']:
+            continue
+        
+        # 检查该位置是否已被占用
+        if data['grid'][check_y][check_x] is not None:
+            return False
+    
+    return True
+
+def find_poems_by_character(char, max_results=10):
+    """根据字符查找诗句"""
+    load_poetry_database()
+    
+    if char not in CHARACTER_INDEX:
+        return []
+    
+    poem_indices = CHARACTER_INDEX[char]
+    # 随机选择最多max_results个诗句
+    selected_indices = random.sample(poem_indices, min(len(poem_indices), max_results))
+    
+    results = []
+    for idx in selected_indices:
+        poem = POETRY_DATABASE[idx]
+        # 找到字符在诗句中的所有位置
+        positions = [i for i, c in enumerate(poem['text']) if c == char]
+        results.append({
+            'text': poem['text'],
+            'original': poem['original'],
+            'title': poem['title'],
+            'author': poem['author'],
+            'dynasty': poem['dynasty'],
+            'char_positions': positions
+        })
+    
+    return results
 
 def update_grid(data, poem):
     """更新网格数据"""
@@ -511,7 +539,9 @@ def update_grid(data, poem):
                 data['grid'][y][x + i] = {
                     'char': char,
                     'poem_id': poem['id'],
-                    'color': poem['color']
+                    'color': poem['color'],
+                    'isAI': poem.get('isAI', False),
+                    'metadata': poem.get('metadata')
                 }
     else:
         # 纵向排列
@@ -520,253 +550,16 @@ def update_grid(data, poem):
                 data['grid'][y + i][x] = {
                     'char': char,
                     'poem_id': poem['id'],
-                    'color': poem['color']
+                    'color': poem['color'],
+                    'isAI': poem.get('isAI', False),
+                    'metadata': poem.get('metadata')
                 }
 
-# WebSocket事件处理
-@socketio.on('connect')
-def handle_connect():
-    """用户连接"""
-    print(f'用户连接: {request.sid}')
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    """用户断开连接"""
-    print(f'用户断开连接: {request.sid}')
-    # 清理用户编辑状态
-    for room_code, room_data in rooms_data.items():
-        if request.sid in room_data.get('editing_users', {}):
-            del room_data['editing_users'][request.sid]
-            # 广播编辑状态更新
-            socketio.emit('editing_status_update', {
-                'editing_users': room_data['editing_users']
-            }, room=room_code)
-
-@socketio.on('join_room')
-def handle_join_room(data):
-    """加入房间"""
-    room_code = data.get('room_code')
-    username = data.get('username')
-    
-    if not room_code or not username:
-        emit('error', {'message': '房间码和用户名不能为空'})
-        return
-    
-    # 验证用户是否在房间中
-    room_data = get_room_data(room_code)
-    if not room_data or username not in room_data['players']:
-        emit('error', {'message': '您不在该房间中'})
-        return
-    
-    # 加入Socket.IO房间
-    join_room(room_code)
-    
-    # 记录在线用户
-    with online_users_lock:
-        online_users[request.sid] = {
-            'username': username,
-            'room_code': room_code,
-            'join_time': time.time()
-        }
-    
-    # 更新房间活动时间
-    room_data['last_activity'] = time.time()
-    
-    # 如果是管理员房间，发送所有房间信息
-    if is_admin_room(room_code) and username == '管理员':
-        rooms_info = get_all_rooms_info()
-        emit('admin_rooms_info', {
-            'rooms': rooms_info,
-            'total_rooms': len(rooms_info),
-            'total_players': sum(room['player_count'] for room in rooms_info)
-        })
-    else:
-        # 通知房间内其他用户
-        emit('user_joined', {
-            'username': username,
-            'message': f'{username} 加入了房间'
-        }, room=room_code, include_self=False)
-        
-        # 发送当前房间状态和玩家统计
-        player_stats = get_player_stats(room_code)
-        emit('room_status', {
-            'players': room_data['players'],
-            'editing_users': room_data.get('editing_users', {}),
-            'player_stats': player_stats
-        })
-        
-        # 广播更新的玩家统计给房间内所有用户
-        socketio.emit('player_stats_update', {
-            'player_stats': player_stats
-        }, room=room_code)
-
-@socketio.on('leave_room')
-def handle_leave_room(data):
-    """离开房间"""
-    room_code = data.get('room_code')
-    username = data.get('username')
-    
-    if room_code:
-        # 离开Socket.IO房间
-        leave_room(room_code)
-        
-        # 清理在线用户记录
-        with online_users_lock:
-            if request.sid in online_users:
-                del online_users[request.sid]
-        
-        # 清理编辑状态
-        room_data = get_room_data(room_code)
-        if room_data and request.sid in room_data.get('editing_users', {}):
-            del room_data['editing_users'][request.sid]
-            # 广播编辑状态更新
-            socketio.emit('editing_status_update', {
-                'editing_users': room_data['editing_users']
-            }, room=room_code)
-        
-        # 通知房间内其他用户并更新玩家统计
-        if username:
-            emit('user_left', {
-                'username': username,
-                'message': f'{username} 离开了房间'
-            }, room=room_code, include_self=False)
-            
-            # 广播更新的玩家统计
-            if room_data:
-                player_stats = get_player_stats(room_code)
-                socketio.emit('player_stats_update', {
-                    'player_stats': player_stats
-                }, room=room_code)
-
-@socketio.on('start_editing')
-def handle_start_editing(data):
-    """开始编辑"""
-    room_code = data.get('room_code')
-    username = data.get('username')
-    position = data.get('position')  # {x, y}
-    
-    if not room_code or not username or not position:
-        return
-    
-    room_data = get_room_data(room_code)
-    if not room_data or username not in room_data['players']:
-        return
-    
-    # 记录编辑状态
-    if 'editing_users' not in room_data:
-        room_data['editing_users'] = {}
-    
-    room_data['editing_users'][request.sid] = {
-        'username': username,
-        'position': position,
-        'start_time': time.time()
-    }
-    
-    # 广播编辑状态更新
-    socketio.emit('editing_status_update', {
-        'editing_users': room_data['editing_users']
-    }, room=room_code)
-
-@socketio.on('stop_editing')
-def handle_stop_editing(data):
-    """停止编辑"""
-    room_code = data.get('room_code')
-    
-    if not room_code:
-        return
-    
-    room_data = get_room_data(room_code)
-    if not room_data:
-        return
-    
-    # 清理编辑状态
-    if request.sid in room_data.get('editing_users', {}):
-        del room_data['editing_users'][request.sid]
-        
-        # 广播编辑状态更新
-        socketio.emit('editing_status_update', {
-            'editing_users': room_data['editing_users']
-        }, room=room_code)
-
-@socketio.on('update_editing_position')
-def handle_update_editing_position(data):
-    """更新编辑位置"""
-    room_code = data.get('room_code')
-    position = data.get('position')
-    
-    if not room_code or not position:
-        return
-    
-    room_data = get_room_data(room_code)
-    if not room_data or request.sid not in room_data.get('editing_users', {}):
-        return
-    
-    # 更新编辑位置
-    room_data['editing_users'][request.sid]['position'] = position
-    
-    # 广播编辑状态更新
-    socketio.emit('editing_status_update', {
-        'editing_users': room_data['editing_users']
-    }, room=room_code)
-
-@socketio.on('request_admin_rooms_info')
-def handle_request_admin_rooms_info(data):
-    """请求管理员房间信息"""
-    room_code = data.get('room_code')
-    username = data.get('username')
-    
-    if not is_admin_room(room_code) or username != '管理员':
-        return
-    
-    rooms_info = get_all_rooms_info()
-    emit('admin_rooms_info', {
-        'rooms': rooms_info,
-        'total_rooms': len(rooms_info),
-        'total_players': sum(room['player_count'] for room in rooms_info)
-    })
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    """用户断开连接"""
-    print(f'用户断开连接: {request.sid}')
-    
-    # 获取断开连接用户的房间信息
-    user_room_code = None
-    with online_users_lock:
-        if request.sid in online_users:
-            user_room_code = online_users[request.sid]['room_code']
-            del online_users[request.sid]
-    
-    # 清理用户编辑状态
-    for room_code, room_data in rooms_data.items():
-        if request.sid in room_data.get('editing_users', {}):
-            del room_data['editing_users'][request.sid]
-            # 广播编辑状态更新
-            socketio.emit('editing_status_update', {
-                'editing_users': room_data['editing_users']
-            }, room=room_code)
-    
-    # 如果用户在某个房间中，广播更新的玩家统计
-    if user_room_code and user_room_code in rooms_data:
-        player_stats = get_player_stats(user_room_code)
-        socketio.emit('player_stats_update', {
-            'player_stats': player_stats
-        }, room=user_room_code)
-
-# 定期清理不活跃房间
-def cleanup_rooms_periodically():
-    """定期清理不活跃房间"""
-    while True:
-        time.sleep(300)  # 每5分钟检查一次
-        cleanup_inactive_rooms()
-
-# 启动清理线程
-import threading
-cleanup_thread = threading.Thread(target=cleanup_rooms_periodically, daemon=True)
-cleanup_thread.start()
-
 if __name__ == '__main__':
-    # 加载房间数据
-    rooms_data.update(load_rooms_data())
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    # 启动时加载诗词数据库
+    print("正在加载诗词数据库...")
+    load_poetry_database()
+    print("诗词数据库加载完成！")
+    
+    app.run(debug=True, host='0.0.0.0', port=7000)
 

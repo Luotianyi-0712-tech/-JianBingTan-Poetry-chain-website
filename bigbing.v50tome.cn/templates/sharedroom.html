@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="screen-orientation" content="landscape">
+    <meta name="x5-orientation" content="landscape">
+    <meta name="msapplication-orientation" content="landscape">
+    <meta http-equiv="ScreenOrientation" content="autoRotate:disabled">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>共享空间 - 煎饼摊</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='1.2') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='sharedroom.css', v='1.0') }}">
+</head>
+<body>
+    <div class="shared-room-container">
+        <header class="shared-room-header">
+            <h1>🏛️ 共享空间</h1>
+            <p class="subtitle">固定房间，永久开放，欢迎所有玩家加入</p>
+            <p class="subtitle">点击进入后会跳转到一开始的页面，再注册下昵称并输入房间号即可加入</p>
+            <p class="subtitle">房间号依次为：春之庭100001；夏之苑100002；秋之阁100003；冬之轩100004；月之榭100005；日之台100006</p>
+            <a href="/" class="back-btn">← 返回主页</a>
+        </header>
+
+        <main class="room-grid">
+            <div class="room-card" data-room="100001">
+                <div class="room-icon">🌸</div>
+                <h3>春之庭</h3>
+                <p class="room-desc">春风得意马蹄疾</p>
+                <div class="room-stats">
+                    <span class="stat-item">
+                        <span class="stat-icon">👥</span>
+                        <span class="stat-value" id="players-100001">0</span>
+                    </span>
+                    <span class="stat-item">
+                        <span class="stat-icon">📝</span>
+                        <span class="stat-value" id="poems-100001">0</span>
+                    </span>
+                </div>
+                <button class="join-room-btn" onclick="joinSharedRoom('100001')">进入房间</button>
+            </div>
+            
+            <div class="room-card" data-room="100002">
+                <div class="room-icon">🍃</div>
+                <h3>夏之苑</h3>
+                <p class="room-desc">接天莲叶无穷碧</p>
+                <div class="room-stats">
+                    <span class="stat-item">
+                        <span class="stat-icon">👥</span>
+                        <span class="stat-value" id="players-100002">0</span>
+                    </span>
+                    <span class="stat-item">
+                        <span class="stat-icon">📝</span>
+                        <span class="stat-value" id="poems-100002">0</span>
+                    </span>
+                </div>
+                <button class="join-room-btn" onclick="joinSharedRoom('100002')">进入房间</button>
+            </div>
+
+            <div class="room-card" data-room="100003">
+                <div class="room-icon">🍂</div>
+                <h3>秋之阁</h3>
+                <p class="room-desc">乍秋风兮蹔起</p>
+                <div class="room-stats">
+                    <span class="stat-item">
+                        <span class="stat-icon">👥</span>
+                        <span class="stat-value" id="players-100003">0</span>
+                    </span>
+                    <span class="stat-item">
+                        <span class="stat-icon">📝</span>
+                        <span class="stat-value" id="poems-100003">0</span>
+                    </span>
+                </div>
+                <button class="join-room-btn" onclick="joinSharedRoom('100003')">进入房间</button>
+            </div>
+
+            <div class="room-card" data-room="100004">
+                <div class="room-icon">❄️</div>
+                <h3>冬之轩</h3>
+                <p class="room-desc">风雪夜归人</p>
+                <div class="room-stats">
+                    <span class="stat-item">
+                        <span class="stat-icon">👥</span>
+                        <span class="stat-value" id="players-100004">0</span>
+                    </span>
+                    <span class="stat-item">
+                        <span class="stat-icon">📝</span>
+                        <span class="stat-value" id="poems-100004">0</span>
+                    </span>
+                </div>
+                <button class="join-room-btn" onclick="joinSharedRoom('100004')">进入房间</button>
+            </div>
+
+            <div class="room-card" data-room="100005">
+                <div class="room-icon">🌙</div>
+                <h3>月之榭</h3>
+                <p class="room-desc">明月几时有</p>
+                <div class="room-stats">
+                    <span class="stat-item">
+                        <span class="stat-icon">👥</span>
+                        <span class="stat-value" id="players-100005">0</span>
+                    </span>
+                    <span class="stat-item">
+                        <span class="stat-icon">📝</span>
+                        <span class="stat-value" id="poems-100005">0</span>
+                    </span>
+                </div>
+                <button class="join-room-btn" onclick="joinSharedRoom('100005')">进入房间</button>
+            </div>
+
+            <div class="room-card" data-room="100006">
+                <div class="room-icon">☀️</div>
+                <h3>日之台</h3>
+                <p class="room-desc">白日依山尽</p>
+                <div class="room-stats">
+                    <span class="stat-item">
+                        <span class="stat-icon">👥</span>
+                        <span class="stat-value" id="players-100006">0</span>
+                    </span>
+                    <span class="stat-item">
+                        <span class="stat-icon">📝</span>
+                        <span class="stat-value" id="poems-100006">0</span>
+                    </span>
+                </div>
+                <button class="join-room-btn" onclick="joinSharedRoom('100006')">进入房间</button>
+            </div>
+        </main>
+
+        <footer class="shared-room-footer">
+            <p>💡 提示：共享空间为固定房间，不会被自动清理。普通用户无法重置游戏，仅管理员可以管理。</p>
+        </footer>
+    </div>
+
+    <!-- 用户注册模态框 -->
+    <div id="registerModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>欢迎来到煎饼摊</h3>
+            </div>
+            <div class="modal-body">
+                <p>请输入您的用户名开始游戏</p>
+                <div class="input-group">
+                    <input type="text" id="usernameInput" placeholder="请输入用户名" maxlength="20">
+                    <button id="registerBtn" class="btn btn-primary">开始游戏</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let pendingRoomCode = null; // 保存待加入的房间码
+
+        // 加入共享房间
+        function joinSharedRoom(roomCode) {
+            // 检查用户是否已注册
+            fetch('/api/check_session')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.logged_in) {
+                        // 已登录，直接加入房间
+                        joinRoomDirectly(roomCode);
+                    } else {
+                        // 未登录，显示注册弹窗
+                        pendingRoomCode = roomCode;
+                        showRegisterModal();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error checking session:', error);
+                    // 出错时也显示注册弹窗
+                    pendingRoomCode = roomCode;
+                    showRegisterModal();
+                });
+        }
+
+        // 直接加入房间
+        function joinRoomDirectly(roomCode) {
+            fetch('/api/join_room', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ room_code: roomCode })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // 跳转到主游戏页面
+                    window.location.href = '/?room=' + roomCode;
+                } else {
+                    alert(data.message || '加入房间失败');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('加入房间时发生错误');
+            });
+        }
+
+        // 显示注册模态框
+        function showRegisterModal() {
+            const modal = document.getElementById('registerModal');
+            if (modal) {
+                modal.style.display = 'flex';
+            }
+        }
+
+        // 隐藏注册模态框
+        function hideRegisterModal() {
+            const modal = document.getElementById('registerModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        // 处理用户注册
+        function handleRegister() {
+            const usernameInput = document.getElementById('usernameInput');
+            const username = usernameInput.value.trim();
+
+            if (!username) {
+                alert('请输入用户名');
+                return;
+            }
+
+            if (username.length > 20) {
+                alert('用户名不能超过20个字符');
+                return;
+            }
+
+            // 注册用户
+            fetch('/api/register', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username: username })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    hideRegisterModal();
+                    // 注册成功后加入房间
+                    if (pendingRoomCode) {
+                        joinRoomDirectly(pendingRoomCode);
+                    }
+                } else {
+                    alert(data.message || '注册失败');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('注册时发生错误');
+            });
+        }
+
+        // 加载房间统计信息
+        function loadRoomStats() {
+            fetch('/api/shared_rooms/stats')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        data.rooms.forEach(room => {
+                            const playersEl = document.getElementById(`players-${room.code}`);
+                            const poemsEl = document.getElementById(`poems-${room.code}`);
+                            if (playersEl) playersEl.textContent = room.player_count;
+                            if (poemsEl) poemsEl.textContent = room.poem_count;
+                        });
+                    }
+                })
+                .catch(error => console.error('Error loading stats:', error));
+        }
+
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            // 绑定注册按钮事件
+            const registerBtn = document.getElementById('registerBtn');
+            if (registerBtn) {
+                registerBtn.addEventListener('click', handleRegister);
+            }
+
+            // 绑定回车键注册
+            const usernameInput = document.getElementById('usernameInput');
+            if (usernameInput) {
+                usernameInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        handleRegister();
+                    }
+                });
+            }
+
+            // 加载统计信息
+            loadRoomStats();
+            
+            // 每30秒刷新一次统计信息
+            setInterval(loadRoomStats, 30000);
+        });
+    </script>
+</body>
+</html>

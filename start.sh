@@ -38,6 +38,3 @@ python3 bt_config.py
 
 
 
-
-
-
